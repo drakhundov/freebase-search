@@ -12,7 +12,7 @@ A Haskell implementation of a Freebase path finder. This tool uses Breadth-First
 ## Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-repo/freebase-search.git
+   git clone git@github.com:drakhundov/freebase-search.git
    cd freebase-search```
 ## Usage
 1. Run
