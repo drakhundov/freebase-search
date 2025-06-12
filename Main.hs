@@ -18,8 +18,8 @@ type Graph = Map.Map MID [MID]
 
 type MIDToNameMap = Map.Map MID Name
 
--- BFS Queue element: (current MID, distance, path).
-data BFSNode = BFSNode MID Distance [MID] deriving (Show, Eq)
+-- Queue/Stack element: (current MID, distance, path).
+data SearchNode = SearchNode MID Distance [MID] deriving (Show, Eq)
 
 -- Result type for shortest path.
 data PathResult = PathResult {
@@ -61,25 +61,36 @@ parseFreebaseFromText content = buildGraph $ map parseLine (lines $ (T.unpack . 
         let graph' = Map.insertWith (++) from [to] graph
         in Map.insertWith (++) to [from] graph'
 
+bfs_func :: Graph -> [SearchNode] -> Set.Set MID -> MID -> Maybe PathResult
+bfs_func _ [] _ _ = Nothing
+bfs_func graph (SearchNode currentMID dist currentPath : queue) visited target
+    | currentMID == target           = Just $ PathResult dist currentPath []
+    | Set.member currentMID visited  = bfs_func graph queue visited target
+    | otherwise                      = 
+        let visited' = Set.insert currentMID visited
+            neighbors = fromMaybe [] (Map.lookup currentMID graph)
+            newNodes = [SearchNode neighbor (dist + 1) (currentPath ++ [neighbor]) 
+                        | neighbor <- neighbors, not (Set.member neighbor visited')]
+        in bfs_func graph (queue ++ newNodes) visited' target
+
+dfs_func :: Graph -> [SearchNode] -> Set.Set MID -> MID -> Maybe PathResult
+dfs_func _ [] _ _ = Nothing
+dfs_func graph (SearchNode currentMID dist currentPath : queue) visited target
+        | currentMID == target            = Just $ PathResult dist (reverse currentPath) []
+        | Set.member currentMID visited   = dfs_func graph queue visited target
+        | otherwise                       = 
+            let visited'   = Set.insert currentMID visited
+                neighbors  = fromMaybe [] (Map.lookup currentMID graph)
+                newNodes   = [SearchNode neighbor (dist + 1) (neighbor : currentPath) 
+                             | neighbor <- neighbors, not (Set.member neighbor visited')]
+            in dfs_func graph (newNodes ++ queue) visited' target
+
 -- ! The actual magic starts here.
 -- BFS implementation for shortest path.
-searchForPath :: Graph -> MID -> MID -> Maybe PathResult
-searchForPath graph startMID endMID
-    | startMID == endMID = Just $ PathResult 0 [startMID] []
-    | otherwise = bfs [BFSNode startMID 0 [startMID]] Set.empty
-  where
-    bfs :: [BFSNode] -> Set.Set MID -> Maybe PathResult
-    bfs [] _ = Nothing
-    bfs (BFSNode currentMID dist currentPath : queue) visited
-        | currentMID == endMID = Just $ PathResult dist currentPath []
-        | Set.member currentMID visited = bfs queue visited
-        | otherwise = 
-            let visited' = Set.insert currentMID visited
-                neighbors = fromMaybe [] (Map.lookup currentMID graph)
-                newNodes = [BFSNode neighbor (dist + 1) (currentPath ++ [neighbor]) 
-                           | neighbor <- neighbors, 
-                             not (Set.member neighbor visited')]
-            in bfs (queue ++ newNodes) visited'
+searchForPath :: Graph -> MID -> MID -> (Graph -> [SearchNode] -> Set.Set MID -> MID -> Maybe PathResult) -> Maybe PathResult
+searchForPath graph startMID endMID search_algo
+    | startMID == endMID   = Just $ PathResult 0 [startMID] []
+    | otherwise            = search_algo graph [SearchNode startMID 0 [startMID]] Set.empty endMID
 
 -- ! This function is called once the path is finished (the MIDs
 -- ! are filled) to convert all MIDs to human-readable names.
@@ -88,17 +99,17 @@ addNamesToPath midToName result =
     result { pathNames = map (\mid -> fromMaybe mid (Map.lookup mid midToName)) (path result) }
 
 -- Main function to find the shortest distance.
-findShortestDistance :: MIDToNameMap -> Graph -> MID -> MID -> IO ()
-findShortestDistance midToNameMap graph startMID endMID = do
-    case searchForPath graph startMID endMID of
-        Nothing -> error $ "No connection found between " ++ startMID ++ " and " ++ endMID
-        Just result -> do
+findPath :: MIDToNameMap -> Graph -> MID -> MID -> (Graph -> [SearchNode] -> Set.Set MID -> MID -> Maybe PathResult) -> IO ()
+findPath midToNameMap graph startMID endMID search_algo = do
+    case searchForPath graph startMID endMID search_algo of
+        Nothing      -> error $ "No connection found between " ++ startMID ++ " and " ++ endMID
+        Just result  -> do
             let resultWithNames = addNamesToPath midToNameMap result
             putStrLn $ "Shortest distance: " ++ show (distance resultWithNames)
             putStrLn $ "Full path:"
             mapM_ putStrLn $ zipWith formatPathStep (path resultWithNames) (pathNames resultWithNames)
-  where
-    formatPathStep mid name = "  " ++ mid ++ " -> " ++ name
+    where
+        formatPathStep mid name = "  " ++ mid ++ " -> " ++ name
 
 -- Utility function to get name from MID.
 getNameByMID :: MIDToNameMap -> MID -> String
@@ -119,7 +130,6 @@ getNameByMID midToNameMap mid = fromMaybe mid (Map.lookup mid midToNameMap)
 --             putStrLn $ indent ++ currentMID ++ " -> " ++ getNameByMID midToNameMap currentMID
 --             mapM_ (\neighbor -> explore neighbor (depth + 1) visited') neighbors
 
-
 main :: IO ()
 main = do
     -- ! The output might be weird on MacOS/Linux due to the
@@ -132,5 +142,5 @@ main = do
     freebaseContent <- readFile "freebase.tsv"
     let midToNameMap = parseMIDToNameFromText midToNameContent
     let graph = parseFreebaseFromText freebaseContent
-    findShortestDistance midToNameMap graph "/m/0kfv9" "/m/01l1sq"  -- The Sopranos to Steven Van Zandt
-    findShortestDistance midToNameMap graph "/m/0h5k" "/m/07jq_"    -- Anthropology to Egypt
+    findPath midToNameMap graph "/m/0kfv9" "/m/01l1sq" bfs_func  -- The Sopranos to Steven Van Zandt
+    findPath midToNameMap graph "/m/0h5k" "/m/07jq_"   dfs_func  -- Anthropology to Egypt
